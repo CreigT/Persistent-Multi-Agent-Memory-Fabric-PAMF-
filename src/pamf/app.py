@@ -1,7 +1,4 @@
-"""PAMF Memory Agent.
-
-PAMF_STORE=memory (default) or postgres. SQL is source of truth.
-"""
+"""PAMF Memory Agent. PAMF_STORE=memory for tests; postgres for deploy."""
 
 from __future__ import annotations
 
@@ -21,8 +18,8 @@ from src.pamf.auth import ROUTE_SCOPES, current_agent
 from src.pamf.events import emit, log as event_log
 
 SECRET_RE = re.compile(r"(api[_-]?key|password|secret|bearer\s+[a-z0-9]|4[0-9]{12}(?:[0-9]{3})?)", re.I)
-
 app = FastAPI(title="PAMF Memory Agent", version="0.1.0")
+citations: dict[str, list[str]] = {}
 
 
 class EntityRef(BaseModel):
@@ -127,22 +124,47 @@ class MemoryStore:
             "forgotten_at": datetime.now(timezone.utc).isoformat(),
         }
 
+    def ping(self) -> bool:
+        return True
+
+    def emit_event(self, type_: str, source: str, subject: str | None, data: dict[str, Any]) -> dict[str, Any]:
+        return emit(type_, source, subject, data)
+
+    def cite(self, decision_id: str, memory_id: str) -> None:
+        citations.setdefault(decision_id, [])
+        if memory_id not in citations[decision_id]:
+            citations[decision_id].append(memory_id)
+
+    def listed_events(self, limit: int = 50) -> list[dict[str, Any]]:
+        return event_log[-limit:]
+
+    def cited(self, decision_id: str) -> list[str]:
+        return citations.get(decision_id, [])
+
 
 def build_store():
     if os.environ.get("PAMF_STORE", "memory") == "postgres":
+        from src.pamf.migrate import migrate
         from src.pamf.pg import PostgresStore
 
+        migrate()
         return PostgresStore()
     return MemoryStore()
 
 
 store = build_store()
-citations: dict[str, list[str]] = {}
 
 
 @app.get("/v1/memory/health")
-def health() -> dict[str, Any]:
+def health() -> Any:
     backend = "postgres" if os.environ.get("PAMF_STORE") == "postgres" else "in-memory"
+    try:
+        store.ping()
+    except Exception as exc:
+        return JSONResponse(
+            {"status": "down", "frozen": False, "index_lag_ms": -1, "sql": backend, "error": str(exc)},
+            status_code=503,
+        )
     return {"status": "frozen" if store.frozen else "ok", "frozen": store.frozen, "index_lag_ms": 0, "sql": backend}
 
 
@@ -171,7 +193,7 @@ def write(
     if agent and not body.actor_agent:
         body.actor_agent = agent["agent_id"]
     packet = store.write(body, idempotency_key)
-    emit("memory.written", body.actor_agent, packet["memory_id"], {"memory_id": packet["memory_id"], "type": packet["type"]})
+    store.emit_event("memory.written", body.actor_agent, packet["memory_id"], {"memory_id": packet["memory_id"], "type": packet["type"]})
     return packet
 
 
@@ -191,10 +213,8 @@ def query(body: MemoryQueryRequest, agent: dict[str, Any] | None = Depends(_agen
     hits.sort(key=lambda r: r["confidence"], reverse=True)
     packets = hits[: body.k]
     if body.decision_id:
-        citations.setdefault(body.decision_id, [])
         for p in packets:
-            if p["memory_id"] not in citations[body.decision_id]:
-                citations[body.decision_id].append(p["memory_id"])
+            store.cite(body.decision_id, p["memory_id"])
     return {"packets": packets, "degraded": False}
 
 
@@ -248,13 +268,13 @@ def freeze(body: FreezeRequest, agent: dict[str, Any] | None = Depends(_agent_fr
 
 @app.get("/v1/memory/decisions/{decision_id}")
 def explain_used(decision_id: str) -> dict[str, Any]:
-    ids = citations.get(decision_id, [])
+    ids = store.cited(decision_id)
     return {"decision_id": decision_id, "memory_ids": ids, "packets": [store.get(i) for i in ids if store.get(i)]}
 
 
 @app.get("/v1/memory/events")
 def list_events(limit: int = 50) -> dict[str, Any]:
-    return {"items": event_log[-limit:]}
+    return {"items": store.listed_events(limit)}
 
 
 @app.get("/")
