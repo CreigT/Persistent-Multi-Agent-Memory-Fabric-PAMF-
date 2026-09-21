@@ -9,7 +9,12 @@ services:
       - "5432:5432"
     volumes:
       - pamf_pg:/var/lib/postgresql/data
-      - ./sql/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql
+      - ./sql:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pamf -d pamf"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
   api:
     build: .
     ports:
@@ -18,7 +23,8 @@ services:
       PAMF_STORE: postgres
       DATABASE_URL: postgresql://pamf:pamf@db:5432/pamf
     depends_on:
-      - db
+      db:
+        condition: service_healthy
 
 volumes:
   pamf_pg:
