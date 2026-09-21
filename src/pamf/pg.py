@@ -141,3 +141,47 @@ class PostgresStore:
             "policy_id": policy_id,
             "forgotten_at": datetime.now(timezone.utc).isoformat(),
         }
+
+    def ping(self) -> bool:
+        with self._conn() as c, c.cursor() as cur:
+            cur.execute("SELECT 1")
+            cur.fetchone()
+        return True
+
+    def emit_event(self, type_: str, source: str, subject: str | None, data: dict[str, Any]) -> dict[str, Any]:
+        eid = f"evt_{uuid.uuid4().hex[:12]}"
+        with self._conn() as c, c.cursor() as cur:
+            cur.execute(
+                "INSERT INTO event_log (event_id, type, source, subject, payload) VALUES (%s,%s,%s,%s,%s::jsonb)",
+                (eid, type_, source, subject, json.dumps(data)),
+            )
+            c.commit()
+        return {"id": eid, "type": type_, "source": source, "subject": subject, "data": data}
+
+    def cite(self, decision_id: str, memory_id: str) -> None:
+        with self._conn() as c, c.cursor() as cur:
+            cur.execute(
+                "INSERT INTO decision_citations (decision_id, memory_id) VALUES (%s,%s) ON CONFLICT DO NOTHING",
+                (decision_id, memory_id),
+            )
+            c.commit()
+
+    def listed_events(self, limit: int = 50) -> list[dict[str, Any]]:
+        with self._conn() as c, c.cursor() as cur:
+            cur.execute(
+                "SELECT event_id AS id, type, source, subject, payload AS data, created_at FROM event_log ORDER BY created_at DESC LIMIT %s",
+                (limit,),
+            )
+            rows = cur.fetchall()
+        out = []
+        for r in rows:
+            item = dict(r)
+            if hasattr(item.get("created_at"), "isoformat"):
+                item["created_at"] = item["created_at"].isoformat()
+            out.append(item)
+        return out
+
+    def cited(self, decision_id: str) -> list[str]:
+        with self._conn() as c, c.cursor() as cur:
+            cur.execute("SELECT memory_id FROM decision_citations WHERE decision_id = %s", (decision_id,))
+            return [r["memory_id"] for r in cur.fetchall()]
