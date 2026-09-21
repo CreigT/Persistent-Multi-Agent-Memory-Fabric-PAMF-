@@ -1,0 +1,328 @@
+openapi: 3.1.0
+info:
+  title: PAMF Memory Agent API
+  description: Persistent Multi-Agent Memory Fabric — typed, versioned, policy-gated memory for autonomous commerce agents.
+  version: 0.1.0
+  contact:
+    name: Creignificent LLC
+    email: Creignificent@gmail.com
+  license:
+    name: Apache-2.0
+servers:
+  - url: https://memory.internal/v1
+    description: In-mesh production
+  - url: http://localhost:8080/v1
+    description: Local
+tags:
+  - name: memory
+  - name: admin
+  - name: health
+paths:
+  /memory/write:
+    post:
+      tags: [memory]
+      operationId: writeMemory
+      summary: Create an immutable memory version
+      security: [{mtls: []}]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/MemoryWriteRequest"}
+      responses:
+        "201":
+          description: Written
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MemoryPacket"}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "422":
+          description: Secret or poison rejected
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+  /memory/query:
+    post:
+      tags: [memory]
+      operationId: queryMemory
+      summary: Hybrid lexical + vector retrieval
+      security: [{mtls: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/MemoryQueryRequest"}
+      responses:
+        "200":
+          description: Ranked packets
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MemoryQueryResponse"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+  /memory/{id}:
+    get:
+      tags: [memory]
+      operationId: getMemory
+      security: [{mtls: []}]
+      parameters:
+        - $ref: "#/components/parameters/MemoryId"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MemoryPacket"}
+        "404": {$ref: "#/components/responses/Error"}
+    patch:
+      tags: [memory]
+      operationId: supersedeMemory
+      summary: Close valid_to on prior row and insert replacement
+      security: [{mtls: []}]
+      parameters:
+        - $ref: "#/components/parameters/MemoryId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/MemoryWriteRequest"}
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MemoryPacket"}
+  /memory/{id}/forget:
+    post:
+      tags: [memory]
+      operationId: forgetMemory
+      security: [{mtls: []}]
+      parameters:
+        - $ref: "#/components/parameters/MemoryId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason, policy_id]
+              properties:
+                reason: {type: string}
+                policy_id: {type: string}
+                approval_id: {type: string, nullable: true}
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ForgetCertificate"}
+        "409":
+          description: Legal hold
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+  /memory/entities/{type}/{id}:
+    get:
+      tags: [memory]
+      operationId: entityTimeline
+      security: [{mtls: []}]
+      parameters:
+        - name: type
+          in: path
+          required: true
+          schema: {type: string}
+        - name: id
+          in: path
+          required: true
+          schema: {type: string}
+        - name: limit
+          in: query
+          schema: {type: integer, default: 50, maximum: 200}
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: "#/components/schemas/MemoryPacket"}
+  /memory/export:
+    post:
+      tags: [admin]
+      operationId: exportMemory
+      security: [{mtls: []}]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                entity_type: {type: string}
+                entity_id: {type: string}
+                purpose: {type: string}
+      responses:
+        "202":
+          description: Export queued
+  /memory/admin/freeze:
+    post:
+      tags: [admin]
+      operationId: freezeWrites
+      security: [{mtls: []}]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [frozen, actor]
+              properties:
+                frozen: {type: boolean}
+                actor: {type: string}
+                reason: {type: string}
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  frozen: {type: boolean}
+                  at: {type: string, format: date-time}
+  /memory/health:
+    get:
+      tags: [health]
+      operationId: health
+      security: []
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Health"}
+components:
+  securitySchemes:
+    mtls:
+      type: mutualTLS
+  parameters:
+    MemoryId:
+      name: id
+      in: path
+      required: true
+      schema: {type: string}
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: {type: string}
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+  schemas:
+    MemoryType:
+      type: string
+      enum: [working, episodic, semantic, procedural, preference, risk]
+    Sensitivity:
+      type: string
+      enum: [public, internal, restricted, secret]
+    EntityRef:
+      type: object
+      required: [type, id]
+      properties:
+        type: {type: string}
+        id: {type: string}
+    Fact:
+      type: object
+      required: [k, v]
+      properties:
+        k: {type: string}
+        v: {}
+    MemoryWriteRequest:
+      type: object
+      required: [actor_agent, memory_type, summary, confidence, sensitivity]
+      properties:
+        actor_agent: {type: string}
+        entity_type: {type: string}
+        entity_id: {type: string}
+        entities:
+          type: array
+          items: {$ref: "#/components/schemas/EntityRef"}
+        memory_type: {$ref: "#/components/schemas/MemoryType"}
+        summary: {type: string, maxLength: 2000}
+        facts:
+          type: array
+          items: {$ref: "#/components/schemas/Fact"}
+        confidence: {type: number, minimum: 0, maximum: 1}
+        evidence_refs:
+          type: array
+          items: {type: string}
+        ttl_seconds: {type: integer, nullable: true}
+        sensitivity: {$ref: "#/components/schemas/Sensitivity"}
+        purpose: {type: string}
+    MemoryPacket:
+      type: object
+      required: [memory_id, type, summary, confidence, sensitivity, created_by, valid_from]
+      properties:
+        memory_id: {type: string}
+        type: {$ref: "#/components/schemas/MemoryType"}
+        entities:
+          type: array
+          items: {$ref: "#/components/schemas/EntityRef"}
+        summary: {type: string}
+        facts:
+          type: array
+          items: {$ref: "#/components/schemas/Fact"}
+        confidence: {type: number}
+        evidence_refs:
+          type: array
+          items: {type: string}
+        sensitivity: {$ref: "#/components/schemas/Sensitivity"}
+        created_by: {type: string}
+        valid_from: {type: string, format: date-time}
+        valid_to: {type: string, format: date-time, nullable: true}
+        freshness:
+          type: string
+          enum: [fresh, degraded]
+    MemoryQueryRequest:
+      type: object
+      required: [query, purpose]
+      properties:
+        query: {type: string}
+        purpose: {type: string}
+        entity_type: {type: string}
+        entity_id: {type: string}
+        memory_types:
+          type: array
+          items: {$ref: "#/components/schemas/MemoryType"}
+        k: {type: integer, default: 8, maximum: 50}
+        decision_id: {type: string}
+    MemoryQueryResponse:
+      type: object
+      properties:
+        packets:
+          type: array
+          items: {$ref: "#/components/schemas/MemoryPacket"}
+        degraded: {type: boolean}
+    ForgetCertificate:
+      type: object
+      properties:
+        certificate_id: {type: string}
+        memory_id: {type: string}
+        policy_id: {type: string}
+        forgotten_at: {type: string, format: date-time}
+    Health:
+      type: object
+      properties:
+        status: {type: string, enum: [ok, degraded, frozen]}
+        frozen: {type: boolean}
+        index_lag_ms: {type: integer}
+        sql: {type: string}
+    Error:
+      type: object
+      properties:
+        error: {type: string}
+        detail: {type: string}
+        code: {type: string}
