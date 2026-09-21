@@ -1,0 +1,24 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pamf
+      POSTGRES_PASSWORD: pamf
+      POSTGRES_DB: pamf
+    ports:
+      - "5432:5432"
+    volumes:
+      - pamf_pg:/var/lib/postgresql/data
+      - ./sql/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql
+  api:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      PAMF_STORE: postgres
+      DATABASE_URL: postgresql://pamf:pamf@db:5432/pamf
+    depends_on:
+      - db
+
+volumes:
+  pamf_pg:
