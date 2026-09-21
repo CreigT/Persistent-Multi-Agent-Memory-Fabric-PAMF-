@@ -1,12 +1,12 @@
-"""PAMF Memory Agent — in-process store for Day 1 scaffolding.
+"""PAMF Memory Agent.
 
-SQL/pgvector swap in behind MemoryStore. Freeze switch is real.
-Secret-shaped payloads are rejected at the write gate.
+PAMF_STORE=memory (default) or postgres. SQL is source of truth.
 """
 
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import uuid
 from datetime import datetime, timezone
@@ -103,13 +103,43 @@ class MemoryStore:
             self.rows[mid] = packet
         return packet
 
+    def get(self, memory_id: str) -> dict[str, Any] | None:
+        return self.rows.get(memory_id)
 
-store = MemoryStore()
+    def close(self, memory_id: str) -> None:
+        row = self.rows.get(memory_id)
+        if row:
+            row["valid_to"] = datetime.now(timezone.utc).isoformat()
+
+    def forget(self, memory_id: str, policy_id: str | None) -> dict[str, Any]:
+        if memory_id in self.holds:
+            raise HTTPException(409, "legal hold")
+        if memory_id not in self.rows:
+            raise HTTPException(404, "not found")
+        del self.rows[memory_id]
+        return {
+            "certificate_id": f"fg_{uuid.uuid4().hex[:12]}",
+            "memory_id": memory_id,
+            "policy_id": policy_id,
+            "forgotten_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+
+def build_store():
+    if os.environ.get("PAMF_STORE", "memory") == "postgres":
+        from src.pamf.pg import PostgresStore
+
+        return PostgresStore()
+    return MemoryStore()
+
+
+store = build_store()
 
 
 @app.get("/v1/memory/health")
 def health() -> dict[str, Any]:
-    return {"status": "frozen" if store.frozen else "ok", "frozen": store.frozen, "index_lag_ms": 0, "sql": "in-memory"}
+    backend = "postgres" if os.environ.get("PAMF_STORE") == "postgres" else "in-memory"
+    return {"status": "frozen" if store.frozen else "ok", "frozen": store.frozen, "index_lag_ms": 0, "sql": backend}
 
 
 @app.post("/v1/memory/write", status_code=201)
@@ -136,7 +166,7 @@ def query(body: MemoryQueryRequest) -> dict[str, Any]:
 
 @app.get("/v1/memory/{memory_id}")
 def get_one(memory_id: str) -> dict[str, Any]:
-    row = store.rows.get(memory_id)
+    row = store.get(memory_id)
     if not row:
         raise HTTPException(404, "not found")
     return row
@@ -144,26 +174,16 @@ def get_one(memory_id: str) -> dict[str, Any]:
 
 @app.patch("/v1/memory/{memory_id}")
 def supersede(memory_id: str, body: MemoryWriteRequest) -> dict[str, Any]:
-    row = store.rows.get(memory_id)
+    row = store.get(memory_id)
     if not row:
         raise HTTPException(404, "not found")
-    row["valid_to"] = datetime.now(timezone.utc).isoformat()
+    store.close(memory_id)
     return store.write(body, f"supersede:{memory_id}:{uuid.uuid4()}")
 
 
 @app.post("/v1/memory/{memory_id}/forget")
 def forget(memory_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    if memory_id in store.holds:
-        raise HTTPException(409, "legal hold")
-    if memory_id not in store.rows:
-        raise HTTPException(404, "not found")
-    del store.rows[memory_id]
-    return {
-        "certificate_id": f"fg_{uuid.uuid4().hex[:12]}",
-        "memory_id": memory_id,
-        "policy_id": payload.get("policy_id"),
-        "forgotten_at": datetime.now(timezone.utc).isoformat(),
-    }
+    return store.forget(memory_id, payload.get("policy_id"))
 
 
 @app.get("/v1/memory/entities/{entity_type}/{entity_id}")
