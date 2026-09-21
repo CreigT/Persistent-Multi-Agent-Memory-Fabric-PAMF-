@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from src.pamf.auth import ROUTE_SCOPES, current_agent
+from src.pamf.events import emit, log as event_log
 
 SECRET_RE = re.compile(r"(api[_-]?key|password|secret|bearer\s+[a-z0-9]|4[0-9]{12}(?:[0-9]{3})?)", re.I)
 
@@ -136,6 +137,7 @@ def build_store():
 
 
 store = build_store()
+citations: dict[str, list[str]] = {}
 
 
 @app.get("/v1/memory/health")
@@ -168,7 +170,9 @@ def write(
 ) -> dict[str, Any]:
     if agent and not body.actor_agent:
         body.actor_agent = agent["agent_id"]
-    return store.write(body, idempotency_key)
+    packet = store.write(body, idempotency_key)
+    emit("memory.written", body.actor_agent, packet["memory_id"], {"memory_id": packet["memory_id"], "type": packet["type"]})
+    return packet
 
 
 @app.post("/v1/memory/query")
@@ -185,7 +189,13 @@ def query(body: MemoryQueryRequest, agent: dict[str, Any] | None = Depends(_agen
         if q in blob or not q:
             hits.append(row)
     hits.sort(key=lambda r: r["confidence"], reverse=True)
-    return {"packets": hits[: body.k], "degraded": False}
+    packets = hits[: body.k]
+    if body.decision_id:
+        citations.setdefault(body.decision_id, [])
+        for p in packets:
+            if p["memory_id"] not in citations[body.decision_id]:
+                citations[body.decision_id].append(p["memory_id"])
+    return {"packets": packets, "degraded": False}
 
 
 @app.get("/v1/memory/{memory_id}")
@@ -236,6 +246,17 @@ def freeze(body: FreezeRequest, agent: dict[str, Any] | None = Depends(_agent_fr
     return {"frozen": store.frozen, "at": datetime.now(timezone.utc).isoformat(), "actor": body.actor}
 
 
+@app.get("/v1/memory/decisions/{decision_id}")
+def explain_used(decision_id: str) -> dict[str, Any]:
+    ids = citations.get(decision_id, [])
+    return {"decision_id": decision_id, "memory_ids": ids, "packets": [store.get(i) for i in ids if store.get(i)]}
+
+
+@app.get("/v1/memory/events")
+def list_events(limit: int = 50) -> dict[str, Any]:
+    return {"items": event_log[-limit:]}
+
+
 @app.get("/")
 def root() -> JSONResponse:
-    return JSONResponse({"service": "pamf-memory", "docs": "/docs", "health": "/v1/memory/health"})
+    return JSONResponse({"service": "pamf-memory", "project": "autonomous-multi-agent-ai-commerce", "day": 1, "docs": "/docs", "health": "/v1/memory/health"})
