@@ -51,6 +51,24 @@ def test_reject_secret() -> None:
     assert r.status_code == 422
 
 
+def test_cite_decision() -> None:
+    body = {
+        "actor_agent": "refund_agent",
+        "memory_type": "episodic",
+        "summary": "Refund approved under policy R-14",
+        "confidence": 0.93,
+        "evidence_refs": ["ticket_8841"],
+        "sensitivity": "restricted",
+        "entity_type": "customer",
+        "entity_id": "cus_123",
+    }
+    client.post("/v1/memory/write", json=body, headers={"Idempotency-Key": "cite1"})
+    q = client.post("/v1/memory/query", json={"query": "refund", "purpose": "support", "decision_id": "dec_1"})
+    assert q.status_code == 200
+    e = client.get("/v1/memory/decisions/dec_1")
+    assert e.json()["memory_ids"]
+
+
 def test_freeze() -> None:
     client.post("/v1/memory/admin/freeze", json={"frozen": True, "actor": "owner"})
     r = client.post(
