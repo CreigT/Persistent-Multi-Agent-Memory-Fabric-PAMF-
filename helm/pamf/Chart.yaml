@@ -1,0 +1,15 @@
+apiVersion: v2
+name: pamf
+description: Persistent Multi-Agent Memory Fabric (Memory Agent)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/CreigT/Persistent-Multi-Agent-Memory-Fabric-PAMF-
+maintainers:
+  - name: Creignificent LLC
+    email: Creignificent@gmail.com
+keywords:
+  - memory
+  - agents
+  - mcp
+  - zero-trust

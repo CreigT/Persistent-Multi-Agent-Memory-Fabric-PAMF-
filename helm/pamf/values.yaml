@@ -1,0 +1,29 @@
+replicaCount: 2
+image:
+  repository: ghcr.io/creigt/pamf
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+service:
+  type: ClusterIP
+  port: 8080
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+freeze:
+  enabled: false
+networkPolicy:
+  enabled: true
+  allowNamespaces:
+    - memory-prod
+    - governance
+    - risk
+env:
+  PAMF_STORE: memory
+  PAMF_LOG_LEVEL: info
+serviceAccount:
+  create: true
+  name: pamf

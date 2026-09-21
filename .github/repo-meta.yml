@@ -1,0 +1,14 @@
+# GitHub About box (set in Settings → General if API topics tool is unavailable)
+description: Persistent Multi-Agent Memory Fabric — typed, versioned, policy-gated memory for autonomous AI commerce agents (PAMF / Memory Agent).
+homepage: https://github.com/CreigT/Persistent-Multi-Agent-Memory-Fabric-PAMF-
+topics:
+  - ai-agents
+  - multi-agent-systems
+  - memory
+  - mcp
+  - fastapi
+  - openapi
+  - helm
+  - zero-trust
+  - autonomous-commerce
+  - creignificent
