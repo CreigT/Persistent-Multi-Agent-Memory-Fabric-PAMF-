@@ -13,9 +13,11 @@ from datetime import datetime, timezone
 from threading import Lock
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+
+from src.pamf.auth import ROUTE_SCOPES, current_agent
 
 SECRET_RE = re.compile(r"(api[_-]?key|password|secret|bearer\s+[a-z0-9]|4[0-9]{12}(?:[0-9]{3})?)", re.I)
 
@@ -142,13 +144,35 @@ def health() -> dict[str, Any]:
     return {"status": "frozen" if store.frozen else "ok", "frozen": store.frozen, "index_lag_ms": 0, "sql": backend}
 
 
+def _agent_write(authorization: str | None = Header(default=None)) -> dict[str, Any] | None:
+    return current_agent(authorization, ROUTE_SCOPES["write"])
+
+
+def _agent_read(authorization: str | None = Header(default=None)) -> dict[str, Any] | None:
+    return current_agent(authorization, ROUTE_SCOPES["query"])
+
+
+def _agent_forget(authorization: str | None = Header(default=None)) -> dict[str, Any] | None:
+    return current_agent(authorization, ROUTE_SCOPES["forget"])
+
+
+def _agent_freeze(authorization: str | None = Header(default=None)) -> dict[str, Any] | None:
+    return current_agent(authorization, ROUTE_SCOPES["freeze"])
+
+
 @app.post("/v1/memory/write", status_code=201)
-def write(body: MemoryWriteRequest, idempotency_key: str = Header(alias="Idempotency-Key")) -> dict[str, Any]:
+def write(
+    body: MemoryWriteRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+    agent: dict[str, Any] | None = Depends(_agent_write),
+) -> dict[str, Any]:
+    if agent and not body.actor_agent:
+        body.actor_agent = agent["agent_id"]
     return store.write(body, idempotency_key)
 
 
 @app.post("/v1/memory/query")
-def query(body: MemoryQueryRequest) -> dict[str, Any]:
+def query(body: MemoryQueryRequest, agent: dict[str, Any] | None = Depends(_agent_read)) -> dict[str, Any]:
     q = body.query.lower()
     hits = []
     for row in store.rows.values():
@@ -182,7 +206,11 @@ def supersede(memory_id: str, body: MemoryWriteRequest) -> dict[str, Any]:
 
 
 @app.post("/v1/memory/{memory_id}/forget")
-def forget(memory_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+def forget(
+    memory_id: str,
+    payload: dict[str, Any],
+    agent: dict[str, Any] | None = Depends(_agent_forget),
+) -> dict[str, Any]:
     return store.forget(memory_id, payload.get("policy_id"))
 
 
@@ -203,7 +231,7 @@ def export_mem() -> dict[str, str]:
 
 
 @app.post("/v1/memory/admin/freeze")
-def freeze(body: FreezeRequest) -> dict[str, Any]:
+def freeze(body: FreezeRequest, agent: dict[str, Any] | None = Depends(_agent_freeze)) -> dict[str, Any]:
     store.frozen = body.frozen
     return {"frozen": store.frozen, "at": datetime.now(timezone.utc).isoformat(), "actor": body.actor}
 
